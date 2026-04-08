@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stock_sim"
+version = "0.1.0"
+description = "Phantom-trading simulator that ranks upcoming market events and news sentiment using live market data"
+requires-python = ">=3.10"
+dependencies = [
+    "pandas>=2.0",
+    "python-dateutil>=2.8",
+    "yfinance>=0.2.40",
+    "feedparser>=6.0",
+    "requests>=2.31",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+]
+
+[project.scripts]
+stocksim = "stock_sim.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
