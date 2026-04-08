@@ -25,6 +25,7 @@ from .news import build_feed
 from .pricing import fetch_history, fetch_last_price
 from .portfolio import Portfolio
 from .signals import Action, score_events
+from .backtest import run_backtest
 
 
 def _rank_tickers_from_recs(recs) -> list[str]:
@@ -169,6 +170,54 @@ def cmd_equity(_: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_backtest(args: argparse.Namespace) -> int:
+    from datetime import datetime as _dt
+
+    tickers = _resolve_watchlist(args.tickers)
+    start = _dt.strptime(args.start, "%Y-%m-%d").date()
+    end = _dt.strptime(args.end, "%Y-%m-%d").date()
+    print(f"Backtesting {len(tickers)} tickers from {start} to {end}...")
+    cal = build_calendar(tickers)
+    feed = build_feed(tickers) if not args.no_news else __import__(
+        "stock_sim.news", fromlist=["NewsFeed"]
+    ).NewsFeed()
+    # Pull history covering the whole range + a forward buffer.
+    span_days = (end - start).days + args.forward_window + 30
+    if span_days <= 60:
+        period = "3mo"
+    elif span_days <= 180:
+        period = "6mo"
+    elif span_days <= 365:
+        period = "1y"
+    elif span_days <= 730:
+        period = "2y"
+    else:
+        period = "5y"
+    hist = fetch_history(tickers, period=period)
+
+    result = run_backtest(
+        cal,
+        hist,
+        feed,
+        start=start,
+        end=end,
+        forward_window_days=args.forward_window,
+        config=DEFAULT_CONFIG,
+    )
+    print()
+    print(result.summary())
+    if args.trades and result.trades:
+        print("\ntrades:")
+        print(f"{'TICKER':<8}{'ENTRY':<12}{'EXIT':<12}{'RET%':>8}  EVENT")
+        for t in result.trades:
+            print(
+                f"{t.ticker:<8}{t.entry_date.isoformat():<12}"
+                f"{t.exit_date.isoformat():<12}{t.return_pct * 100:>+7.2f}  "
+                f"{t.event_description}"
+            )
+    return 0
+
+
 def cmd_reset(args: argparse.Namespace) -> int:
     with Portfolio(DB_PATH, starting_cash=DEFAULT_CONFIG.starting_cash) as pf:
         pf.reset(starting_cash=args.cash)
@@ -219,6 +268,19 @@ def build_parser() -> argparse.ArgumentParser:
     r = sub.add_parser("reset", help="wipe portfolio state")
     r.add_argument("--cash", type=float, default=None, help="new starting cash")
     r.set_defaults(func=cmd_reset)
+
+    bt = sub.add_parser("backtest", help="walk-forward backtest of the scoring engine")
+    bt.add_argument("--start", required=True, help="YYYY-MM-DD")
+    bt.add_argument("--end", required=True, help="YYYY-MM-DD")
+    bt.add_argument("--forward-window", type=int, default=5, help="trading days held post-event")
+    bt.add_argument("--tickers", nargs="*", help="override watchlist")
+    bt.add_argument("--trades", action="store_true", help="print every trade")
+    bt.add_argument(
+        "--no-news",
+        action="store_true",
+        help="skip news fetch (use empty feed). Removes look-ahead bias from sentiment.",
+    )
+    bt.set_defaults(func=cmd_backtest)
 
     return p
 

@@ -16,11 +16,12 @@ a broker and no money moves.
 
 - **Calendar:** fetches real upcoming earnings dates from Yahoo Finance
   (via `yfinance`) for your watchlist, plus a bundled schedule of FOMC
-  meetings, CPI releases, and non-farm payrolls.
+  meetings, CPI releases, non-farm payrolls, and FDA PDUFA dates scraped
+  from drugs.com.
 - **News:** pulls real ticker-level RSS from Yahoo Finance and macro
   news from Yahoo / CNBC / Reuters RSS feeds. No API keys required.
-- **Sentiment:** lightweight finance-lexicon scorer (pluggable — swap in
-  FinBERT or an LLM behind the same interface).
+- **Sentiment (pluggable):** default lexicon scorer, or swap in the
+  Claude API backend for FinBERT-grade classification (see below).
 - **Priced-in detector:** computes recent drift vs. the stock's own
   volatility; if the move has already happened, the signal fades.
 - **Macro shock detector:** scans global headlines for war, sanctions,
@@ -29,19 +30,25 @@ a broker and no money moves.
   and decides BUY / HOLD / AVOID per event.
 - **Phantom portfolio:** SQLite-backed cash + positions, weighted-average
   cost basis, realized and unrealized P&L, full trade log.
+- **Walk-forward backtest:** rerun the scoring engine with
+  `as_of=<past date>` for every trading day in a range and measure the
+  forward return on every BUY it emits. Hit rate + avg return summary.
 
 ## Install
 
 ```bash
 # from the repo root
 python -m venv .venv && source .venv/bin/activate
-pip install -e .[dev]
+pip install -e '.[dev]'
+
+# optional: add the Claude API sentiment backend
+pip install -e '.[dev,llm]'
 ```
 
 Requires Python 3.10+. Network access is required for live data
-(earnings dates, prices, news). There is **no mock-data fallback** —
-if your network is down the `calendar`, `news`, `buy`, and `sell`
-commands will fail.
+(earnings dates, prices, news, FDA calendar). There is **no mock-data
+fallback** — if your network is down the `calendar`, `news`, `buy`,
+`sell`, and `backtest` commands will fail.
 
 ## Usage
 
@@ -76,7 +83,29 @@ stocksim equity
 
 # reset the portfolio with a fresh $100k
 stocksim reset --cash 100000
+
+# walk-forward backtest: rerun the engine for every trading day in a range
+stocksim backtest --start 2024-06-01 --end 2024-12-31 --forward-window 5 --trades
 ```
+
+### Claude-powered sentiment
+
+Set the environment variables and the lexicon scorer is replaced by
+per-headline Claude classification, batched into one API call per
+ticker:
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+export STOCKSIM_SENTIMENT_BACKEND=claude
+# optional overrides
+export STOCKSIM_CLAUDE_MODEL=claude-opus-4-6   # default
+export STOCKSIM_CLAUDE_MAX_BATCH=40            # headlines per call
+
+stocksim calendar
+```
+
+The system prompt is cached (`cache_control: ephemeral`), so repeated
+calls within a 5-minute window only pay ~0.1x for the instructions.
 
 ## Architecture
 
@@ -87,9 +116,11 @@ src/stock_sim/
     models.py          Event + EventType + baseline impact table
     calendar.py        container with horizon / ticker filters
     providers.py       yfinance earnings + static FOMC/CPI/NFP calendar
+    fda_provider.py    drugs.com PDUFA calendar scraper
   news/
     models.py          NewsItem
-    sentiment.py       lexicon sentiment + macro-shock detector
+    sentiment.py       backend interface + lexicon + macro-shock detector
+    claude_backend.py  Claude API sentiment backend (pluggable, [llm] extra)
     feed.py            NewsFeed container
     providers.py       Yahoo/CNBC/Reuters RSS via feedparser
   pricing/
@@ -98,6 +129,8 @@ src/stock_sim/
     priced_in.py       recent-drift vs. volatility heuristic
   signals/
     engine.py          combines everything into ranked recommendations
+  backtest/
+    runner.py          walk-forward backtest of the scoring engine
   portfolio/
     portfolio.py       SQLite-backed phantom trader
   cli.py               argparse entrypoint

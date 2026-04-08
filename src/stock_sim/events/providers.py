@@ -14,6 +14,7 @@ from typing import Iterable
 import pandas as pd
 
 from .calendar import EventCalendar
+from .fda_provider import fetch_fda_calendar
 from .models import Event, EventType
 
 
@@ -122,9 +123,24 @@ def macro_events(as_of: date | None = None) -> list[Event]:
     return out
 
 
-def build_calendar(tickers: Iterable[str]) -> EventCalendar:
-    """Build a calendar combining live earnings + static macro schedule."""
+def build_calendar(
+    tickers: Iterable[str],
+    *,
+    include_fda: bool = True,
+    fda_ticker_map: dict[str, str] | None = None,
+) -> EventCalendar:
+    """Build a calendar combining live earnings, FDA PDUFA, and macro events.
+
+    FDA scraping is best-effort: if the drugs.com fetch or parse fails,
+    we log and continue with the rest of the calendar.
+    """
     cal = EventCalendar()
     cal.extend(macro_events())
     cal.extend(fetch_earnings_events(tickers))
+    if include_fda:
+        ticker_set = {t.upper() for t in tickers}
+        fda_events = fetch_fda_calendar(ticker_map=fda_ticker_map)
+        # Only keep FDA events whose ticker is on our watchlist — the signal
+        # engine scores per-ticker and unknown tickers won't have price data.
+        cal.extend(ev for ev in fda_events if (ev.ticker or "") in ticker_set)
     return cal
